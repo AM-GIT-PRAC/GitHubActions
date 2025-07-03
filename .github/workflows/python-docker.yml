@@ -46,7 +46,6 @@ jobs:
         # Set outputs for other jobs
         echo "version=$(python --version)" >> $GITHUB_OUTPUT
         echo "success=true" >> $GITHUB_OUTPUT
-    
 
   # Job 2: Checkout Code (Sequential - runs after Job 1)
   checkout-code:
@@ -75,8 +74,12 @@ jobs:
         echo "Event: ${{ github.event_name }}"
         echo "Working Directory: $(pwd)"
         echo "=============================="
-        
-        # Check if app.py exists
+    
+    # Check if app.py exists (FIXED: Added proper id and step)
+    - name: "🔍 Check for app.py"
+      id: file-check
+      run: |
+        echo "Checking for app.py..."
         if [ -f "app.py" ]; then
           echo "✅ app.py found!"
           echo "files=found" >> $GITHUB_OUTPUT
@@ -84,7 +87,9 @@ jobs:
           echo "❌ app.py not found!"
           echo "files=missing" >> $GITHUB_OUTPUT
         fi
-
+        
+        echo "All files in directory:"
+        ls -la
 
   # Job 3: Run Python Application (Parallel - runs after Job 2)
   run-python-app:
@@ -92,9 +97,12 @@ jobs:
     runs-on: ubuntu-latest
     name: "Run Python Application"
     
+    # FIXED: Added condition to only run if files are found
+    if: needs.checkout-code.outputs.files-found == 'found'
+    
     steps:
     # Pre-built Action: Setup Python
-    - name: " Setup Python"
+    - name: "🐍 Setup Python"
       uses: actions/setup-python@v4
       with:
         python-version: ${{ env.PYTHON_VERSION }}
@@ -111,15 +119,20 @@ jobs:
         echo "Current Time: $(date)"
         echo ""
         
-        # Run the Python application
-        python app.py
+        # Check if app.py exists before running
+        if [ -f "app.py" ]; then
+          echo "Running app.py..."
+          python app.py
+        else
+          echo "❌ app.py not found!"
+          exit 1
+        fi
         
         echo ""
         echo "=== PYTHON APPLICATION COMPLETED ==="
       env:
         GITHUB_ACTIONS: true
         CUSTOM_MESSAGE: "Running from GitHub Actions!"
-    
 
   # Job 4: Docker Build and Push (Parallel - runs after Job 2)
   docker-build-push:
@@ -154,6 +167,17 @@ jobs:
         echo "Tag: ${{ github.sha }}"
         echo "Build Context: $(pwd)"
         echo ""
+        
+        # Check if required files exist
+        if [ ! -f "app.py" ]; then
+          echo "❌ app.py not found!"
+          exit 1
+        fi
+        
+        if [ ! -f "Dockerfile" ]; then
+          echo "❌ Dockerfile not found!"
+          exit 1
+        fi
         
         # Build the image
         docker build -t ${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.sha }} .
