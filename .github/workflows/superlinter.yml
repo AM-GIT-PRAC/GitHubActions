@@ -1,17 +1,191 @@
-name: Super-Linter
+name: "Python App"
 
-on: push
+# Trigger conditions
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+# Global environment variables
+env:
+  PYTHON_VERSION: '3.11'
+  DOCKER_IMAGE_NAME: 'my-python-app'
 
 jobs:
-  super-lint:
-    name: Lint Code base
+  # Job 1: Setup and Install Python (Sequential - runs first)
+  setup-python:
     runs-on: ubuntu-latest
+    name: "Setup Python Environment"
+    
+    # Output for other jobs to use
+    outputs:
+      python-version: ${{ steps.python-info.outputs.version }}
+      setup-success: ${{ steps.python-info.outputs.success }}
+    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
+    # Pre-built Action: Setup Python
+    - name: "🐍 Setup Python ${{ env.PYTHON_VERSION }}"
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    # Display Python information
+    - name: "📋 Display Python Info"
+      id: python-info
+      run: |
+        echo "=== PYTHON SETUP INFORMATION ==="
+        echo "Python Version: $(python --version)"
+        echo "Python Path: $(which python)"
+        echo "Pip Version: $(pip --version)"
+        echo "Available Python packages:"
+        pip list
+        echo "================================"
+        
+        # Set outputs for other jobs
+        echo "version=$(python --version)" >> $GITHUB_OUTPUT
+        echo "success=true" >> $GITHUB_OUTPUT
+    
 
-      - name: Run Super-Linter
-        uses: github/super-linter@v3
-        env:
-          DEFAULT_BRANCH: main
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  # Job 2: Checkout Code (Sequential - runs after Job 1)
+  checkout-code:
+    needs: setup-python
+    runs-on: ubuntu-latest
+    name: "Checkout Repository Code"
+    
+    outputs:
+      files-found: ${{ steps.file-check.outputs.files }}
+    
+    steps:
+    # Pre-built Action: Checkout repository
+    - name: "📥 Checkout Repository"
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Get full history
+    
+    # Display repository information
+    - name: "📂 Display Repository Info"
+      run: |
+        echo "=== REPOSITORY INFORMATION ==="
+        echo "Repository: ${{ github.repository }}"
+        echo "Branch: ${{ github.ref_name }}"
+        echo "Commit SHA: ${{ github.sha }}"
+        echo "Actor: ${{ github.actor }}"
+        echo "Event: ${{ github.event_name }}"
+        echo "Working Directory: $(pwd)"
+        echo "=============================="
+        
+        # Check if app.py exists
+        if [ -f "app.py" ]; then
+          echo "✅ app.py found!"
+          echo "files=found" >> $GITHUB_OUTPUT
+        else
+          echo "❌ app.py not found!"
+          echo "files=missing" >> $GITHUB_OUTPUT
+        fi
+
+
+  # Job 3: Run Python Application (Parallel - runs after Job 2)
+  run-python-app:
+    needs: [setup-python, checkout-code]
+    runs-on: ubuntu-latest
+    name: "Run Python Application"
+    
+    steps:
+    # Pre-built Action: Setup Python
+    - name: " Setup Python"
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    # Pre-built Action: Checkout code
+    - name: "📥 Checkout Code"
+      uses: actions/checkout@v4
+    
+    # Run the Python application
+    - name: "🚀 Run Python App"
+      run: |
+        echo "=== RUNNING PYTHON APPLICATION ==="
+        echo "Python Version: ${{ needs.setup-python.outputs.python-version }}"
+        echo "Current Time: $(date)"
+        echo ""
+        
+        # Run the Python application
+        python app.py
+        
+        echo ""
+        echo "=== PYTHON APPLICATION COMPLETED ==="
+      env:
+        GITHUB_ACTIONS: true
+        CUSTOM_MESSAGE: "Running from GitHub Actions!"
+    
+
+  # Job 4: Docker Build and Push (Parallel - runs after Job 2)
+  docker-build-push:
+    needs: [setup-python, checkout-code]
+    runs-on: ubuntu-latest
+    name: "Docker Build and Push"
+    
+    # Only run if files are found and not on PR
+    if: needs.checkout-code.outputs.files-found == 'found' && github.event_name != 'pull_request'
+    
+    steps:
+    # Pre-built Action: Checkout code
+    - name: "📥 Checkout Code"
+      uses: actions/checkout@v4
+    
+    # Pre-built Action: Setup Docker Buildx
+    - name: "🐳 Set up Docker Buildx"
+      uses: docker/setup-buildx-action@v3
+    
+    # Pre-built Action: Login to Docker Hub
+    - name: "🔑 Login to Docker Hub"
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+    
+    # Build Docker image
+    - name: "🔨 Build Docker Image"
+      run: |
+        echo "=== BUILDING DOCKER IMAGE ==="
+        echo "Image Name: ${{ env.DOCKER_IMAGE_NAME }}"
+        echo "Tag: ${{ github.sha }}"
+        echo "Build Context: $(pwd)"
+        echo ""
+        
+        # Build the image
+        docker build -t ${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.sha }} .
+        docker build -t ${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE_NAME }}:latest .
+        
+        echo "✅ Docker image built successfully!"
+        echo ""
+        echo "Built images:"
+        docker images | grep ${{ env.DOCKER_IMAGE_NAME }}
+    
+    # Test Docker image
+    - name: "🧪 Test Docker Image"
+      run: |
+        echo "=== TESTING DOCKER IMAGE ==="
+        
+        # Run the container
+        docker run --rm ${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE_NAME }}:latest
+        
+        echo "✅ Docker image test completed!"
+    
+    # Push to Docker Hub
+    - name: "📤 Push to Docker Hub"
+      run: |
+        echo "=== PUSHING TO DOCKER HUB ==="
+        
+        # Push both tags
+        docker push ${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.sha }}
+        docker push ${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE_NAME }}:latest
+        
+        echo "✅ Images pushed successfully!"
+        echo ""
+        echo "Image URLs:"
+        echo "  https://hub.docker.com/r/${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE_NAME }}"
+        echo "  docker pull ${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE_NAME }}:latest"
+        echo "  docker pull ${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.sha }}"
